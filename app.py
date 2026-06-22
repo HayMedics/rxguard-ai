@@ -33,7 +33,7 @@ NAVY, BLUE, AMBER = "#1E2563", "#2E57A6", "#FEA621"
 MODEL_FILE  = "meddose_model_v2.joblib"
 # Uses the local model file if present; otherwise downloads from this GitHub
 # Release asset (this is what happens on Streamlit Cloud).
-MODEL_URL   = "https://github.com/HayMedics/rxguard-ai/releases/download/v1.0/meddose_model_v2.joblib"
+MODEL_URL   = "https://github.com/HayMedics/rxguard-ai/releases/download/v2.0/meddose_model_v2.joblib"
 LABELS_FILE = "interaction_type_labels.csv"
 LOGO_CANDIDATES = ["assets/logo.png", "assets/HMA__Tagline.jpg", "assets/HMA.jpg",
                    "assets/HMA__Tagline_PNG.png", "assets/HMA_PNG.png"]
@@ -206,6 +206,8 @@ DESC_FUNCS = {
 def _match(d, groups):
     return all(any(o in d for o in g) for g in groups)
 
+CONF_MIN = 0.30   # below this top-confidence, show "low confidence" instead of a risk flag
+
 RISK_RULES = [
  ([("qtc", "qt-prolong", "qt prolong")], "high", "Heart-rhythm risk (QT prolongation): palpitations, dizziness, fainting — seek urgent care if these occur."),
  ([("serotonergic", "serotonin")], "high", "Serotonin syndrome risk: agitation, fast heartbeat, high temperature, muscle stiffness, confusion — seek urgent care."),
@@ -240,8 +242,9 @@ def assess_risk(desc):
 
 RISK_META = {"high": ("🔴", "High-risk mechanism", "#C0392B", "#FCE9E7"),
              "moderate": ("🟠", "Monitor", "#B9770E", "#FFF3E0"),
-             "low": ("🟡", "Lower concern", "#8A6D0B", "#FFFBEA")}
-RISK_RANK = {"high": 0, "moderate": 1, "low": 2}
+             "low": ("🟡", "Lower concern", "#8A6D0B", "#FFFBEA"),
+             "uncertain": ("⚪", "Low confidence", "#5b6480", "#EEF1F6")}
+RISK_RANK = {"high": 0, "moderate": 1, "low": 2, "uncertain": 3}
 
 def risk_badge(level):
     e, lbl, fg, bg = RISK_META[level]
@@ -375,8 +378,9 @@ def build_pdf(meds, rows, logo_path):
                                "(see the Risk column). A flag reflects the predicted interaction type, "
                                "not a verified severity rating; its absence is not proof of safety.", warn))
         story.append(Spacer(1, 3*mm))
-    rlabel = {"high": "High", "moderate": "Monitor", "low": "Lower"}
-    rcol = {"high": rlc.HexColor("#C0392B"), "moderate": rlc.HexColor("#B9770E"), "low": rlc.HexColor("#8A6D0B")}
+    rlabel = {"high": "High", "moderate": "Monitor", "low": "Lower", "uncertain": "Low conf."}
+    rcol = {"high": rlc.HexColor("#C0392B"), "moderate": rlc.HexColor("#B9770E"),
+            "low": rlc.HexColor("#8A6D0B"), "uncertain": rlc.HexColor("#5b6480")}
     data = [["Drug A", "Drug B", "Predicted interaction", "Risk", "Conf."]]
     cmds = [("BACKGROUND", (0,0), (-1,0), navy), ("TEXTCOLOR", (0,0), (-1,0), rlc.white),
             ("FONTSIZE", (0,0), (-1,-1), 8), ("VALIGN", (0,0), (-1,-1), "TOP"),
@@ -438,30 +442,45 @@ def render_check(entry):
                     'A flag is based on the predicted interaction type — its absence does <u>not</u> '
                     'mean a combination is safe.</div>', unsafe_allow_html=True)
     st.markdown(f"##### {len(meds)} medications → {len(plist)} pair(s) analysed")
-    st.caption("Sorted by risk, then model confidence. Risk reflects the predicted interaction "
-               "*mechanism* — not a validated severity score or your personal risk.")
+    st.caption(f"Sorted by risk, then confidence. Risk reflects the predicted interaction "
+               f"*mechanism*, not a validated severity score. Predictions below {CONF_MIN*100:.0f}% "
+               "confidence are shown as low-confidence guesses, without a risk flag.")
     for idx, p in enumerate(plist):
         border = RISK_META[p["risk"]][2]
+        uncertain = p["risk"] == "uncertain"
+        desc = ("Model's best guess (low confidence): " + p["desc"]) if uncertain else p["desc"]
+        if uncertain:
+            watch_top = f'<div class="rx-watch" style="background:#EEF1F6;color:#33384d;">ℹ️ {p["note"]}</div>'
+            watch_pair = f'<div class="muted" style="margin-top:.3rem;">{p["note"]}</div>'
+        else:
+            watch_top = f'<div class="rx-watch">⚠️ <b>What to watch for:</b> {p["note"]}</div>'
+            watch_pair = f'<div class="muted" style="margin-top:.3rem;">What to watch for: {p["note"]}</div>'
         if idx == 0:
-            st.markdown(f'<div class="rx-top"><h4>{p["na"]} ↔ {p["nb"]}</h4>'
-                        f'<span class="rx-badge">{p["conf"]*100:.1f}% confidence</span> '
-                        f'{risk_badge(p["risk"])}'
-                        f'<p style="margin-top:.7rem;font-size:1.04rem;">{p["desc"]}</p>'
-                        f'<div class="rx-watch">⚠️ <b>What to watch for:</b> {p["note"]}</div></div>',
-                        unsafe_allow_html=True)
-            if len(meds) == 2 and p["others"]:
-                st.markdown("###### Other possible interactions")
+            st.markdown(
+                f'<div class="rx-top"><h4>{p["na"]} ↔ {p["nb"]}</h4>'
+                f'<span class="rx-badge">{p["conf"]*100:.1f}%</span> {risk_badge(p["risk"])}'
+                f'<p style="margin-top:.7rem;font-size:1rem;"><b>Most likely type:</b> {desc}</p>'
+                f'{watch_top}'
+                f'<p style="margin-top:.6rem;font-size:.82rem;opacity:.8;">'
+                f'The model ranks one type highest but other types may be equally or more relevant. '
+                f'Structure alone cannot confirm direction or mechanism — verify with a pharmacist.</p>'
+                f'</div>', unsafe_allow_html=True)
+            if p["others"]:
+                st.markdown("###### Other predicted types (all plausible — review all)")
+                st.caption("The model sees these as alternatives. In some cases a lower-ranked "
+                           "type may be the clinically correct one.")
                 for d, pr in p["others"]:
-                    st.markdown(f'<div class="muted">{d}</div><div class="bar-wrap"><div class="bar-fill" '
-                                f'style="width:{max(pr*100,1):.0f}%;"></div></div>'
-                                f'<div class="muted">{pr*100:.1f}%</div>', unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div class="muted">{d}</div>'
+                        f'<div class="bar-wrap"><div class="bar-fill" '
+                        f'style="width:{max(pr*100,1):.0f}%;"></div></div>'
+                        f'<div class="muted">{pr*100:.1f}%</div>', unsafe_allow_html=True)
         else:
             st.markdown(f'<div class="rx-pair" style="border-left-color:{border};">'
                         f'<b>{p["na"]} ↔ {p["nb"]}</b> '
                         f'<span class="rx-badge-sm">{p["conf"]*100:.1f}%</span> {risk_badge(p["risk"])}'
-                        f'<div style="margin-top:.35rem;color:#33384d;">{p["desc"]}</div>'
-                        f'<div class="muted" style="margin-top:.3rem;">What to watch for: {p["note"]}</div>'
-                        f'</div>', unsafe_allow_html=True)
+                        f'<div style="margin-top:.35rem;color:#33384d;">{desc}</div>'
+                        f'{watch_pair}</div>', unsafe_allow_html=True)
 
     with st.expander("🔬  Why these predictions? (model explainability)"):
         st.markdown("**What the model relies on overall**")
@@ -550,9 +569,15 @@ with tab1:
                 continue
             top = predict_top(x, bundle, labels, k=5)
             desc = with_names(top[0][0], na, nb)
-            level, note = assess_risk(desc)
+            conf = top[0][1]
+            if conf < CONF_MIN:
+                level = "uncertain"
+                note = ("The model couldn't confidently classify this pair, so this is a "
+                        "low-confidence guess — not a reliable result. Don't act on it.")
+            else:
+                level, note = assess_risk(desc)
             plist.append({"na": na, "sa": sa, "nb": nb, "sb": sb,
-                          "desc": desc, "conf": top[0][1], "risk": level, "note": note,
+                          "desc": desc, "conf": conf, "risk": level, "note": note,
                           "others": [(with_names(d, na, nb), p) for d, p in top[1:]]})
         plist.sort(key=lambda r: (RISK_RANK[r["risk"]], -r["conf"]))
         entry = {"time": datetime.now().strftime("%d %b, %H:%M"), "meds": meds, "pairs": plist}
