@@ -1,0 +1,19 @@
+# virtual environment (never commit this)
+.venv/
+venv/
+env/
+
+# python cruft
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# large build artifacts the deployed app does NOT need
+drugbank_ddi.tab
+meddose_features_v2.npz
+meddose_features.parquet
+drug_descriptors.parquet
+
+# editor / OS
+.vscode/
+.DS_Store
