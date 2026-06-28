@@ -8,7 +8,7 @@ likely interaction type, explains *why*, and produces a downloadable report.
 > Predictions come from a machine-learning model and may be wrong. Always consult a
 > qualified pharmacist or clinician.
 
-**🔗 Live demo:** _add your Streamlit Cloud link here once deployed_
+**🔗 Live demo:** _https://rxguard-ai-haymedics.streamlit.app_
 
 ---
 
@@ -57,4 +57,4 @@ The app expects `meddose_model_v2.joblib`, `interaction_type_labels.csv`, and th
 
 ---
 
-_Built by **HayMedics Academy** · Data | Research | Innovation_
+_Built by **Awal Olalekan Abdulrahman** | HayMedics Academy · Data | Research | Innovation_
